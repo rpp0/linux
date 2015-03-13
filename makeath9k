@@ -1,0 +1,19 @@
+read -p "This will compile and swap your ath9k kernel modules on the running kernel. Use at your own risk! Are you sure you want to do this? " -n 1 -r
+echo 
+if [[ $REPLY =~ ^[Yy]$ ]]
+then
+cd ./drivers/net/wireless/ath/ath9k
+sudo make -C /lib/modules/`uname -r`/build M=`pwd` modules
+sudo rmmod ath9k_htc
+sudo rmmod ath9k
+sudo rmmod ath9k_common
+sudo rmmod ath9k_hw
+sleep 1
+sudo insmod ./ath9k_hw.ko
+sudo insmod ./ath9k_common.ko
+sudo insmod ./ath9k.ko
+sudo insmod ./ath9k_htc.ko
+cd ../../../../../
+else
+echo "Cancelled!"
+fi

@@ -14,6 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <net/genetlink.h>
 #include "htc.h"
 
 static ssize_t read_file_tgt_int_stats(struct file *file, char __user *user_buf,
@@ -490,13 +491,298 @@ void ath9k_htc_get_et_stats(struct ieee80211_hw *hw,
 	WARN_ON(i != ATH9K_HTC_SSTATS_LEN);
 }
 
+struct ath9k_htc_priv *genl_ath9k_priv = NULL;
+
+enum {
+	ATH9K_HTC_A_UNSPEC,
+	ATH9K_HTC_A_STR,
+	ATH9K_HTC_A_REG,
+	ATH9K_HTC_A_VAL,
+	ATH9K_HTC_A_MAX,
+};
+
+enum {
+	ATH9K_HTC_C_UNSPEC,
+	ATH9K_C_ECHO,
+	ATH9K_C_SET,
+	ATH9K_C_RATE,
+	ATH9K_C_RESET,
+	ATH9K_C_MAX,
+};
+
+/* attribute policy: defines which attribute has which type (e.g int, char * etc)
+ * possible values defined in net/netlink.h 
+ */
+static struct nla_policy ath9k_htc_genl_policy[ATH9K_HTC_A_MAX] = {
+	[ATH9K_HTC_A_STR] = { .type = NLA_NUL_STRING },
+	[ATH9K_HTC_A_REG] = { .type = NLA_U32 },
+	[ATH9K_HTC_A_VAL] = { .type = NLA_U32 },
+};
+
+static struct genl_family ath9k_htc_gnl_family = {
+	.id = GENL_ID_GENERATE,
+	.hdrsize = 0,
+	.name = "ATH9K_HTC",
+	.version = 1,
+	.maxattr = ATH9K_HTC_A_MAX-1,
+};
+
+static int ath9k_echo(struct sk_buff *iskb, struct genl_info *info) {
+	struct nlattr *received_str_attr;
+	char *received_str;
+	struct sk_buff *skb;
+	int errc;
+	void *msg_head;
+
+	if (info == NULL)
+		goto out;
+
+	received_str_attr = info->attrs[ATH9K_HTC_A_STR];
+	if (received_str_attr) {
+		received_str = (char *)nla_data(received_str_attr);
+		if (received_str != NULL)
+			printk("ath9k_htc: got %s\n", received_str);
+		else
+			printk(KERN_ERR "error while receiving data\n");
+	} else {
+		printk(KERN_ERR "attribute %i not present\n", ATH9K_HTC_A_STR);
+	}
+
+	skb = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (skb == NULL)
+		goto out;
+
+	msg_head = genlmsg_put(skb, 0, info->snd_seq + 1, &ath9k_htc_gnl_family, 0, ATH9K_C_ECHO);
+	if (msg_head == NULL) {
+		errc = -ENOMEM;
+		goto out;
+	}
+	
+	errc = nla_put_string(skb, ATH9K_HTC_A_STR, "pong");
+	if (errc != 0)
+		goto out;
+
+	genlmsg_end(skb, msg_head);
+
+	errc = genlmsg_unicast(genl_info_net(info), skb, info->snd_portid);
+	if (errc != 0)
+		goto out;
+
+	return 0;
+
+out:
+	printk(KERN_ERR "an error occured in ath9k_echo:\n");
+
+	return 1;
+}
+
+static int ath9k_set_reg(struct sk_buff *iskb, struct genl_info *info) {
+	struct nlattr *received_int_attr;
+	u32 *received_reg = NULL;
+	u32 *received_val = NULL;
+	struct sk_buff *skb;
+	int errc;
+	void *msg_head;
+	u32 vals[2];
+
+	if (info == NULL)
+		goto out;
+
+	// TODO repeated code... simplify
+	received_int_attr = info->attrs[ATH9K_HTC_A_REG];
+	if (received_int_attr) {
+		received_reg = (u32*)nla_data(received_int_attr);
+		if(received_reg)
+			printk("ath9k_htc: reg %08x\n", *received_reg);
+	} else {
+		printk(KERN_ERR "attribute %i not present\n", ATH9K_HTC_A_REG);
+	}
+
+	received_int_attr = info->attrs[ATH9K_HTC_A_VAL];
+	if (received_int_attr) {
+		received_val = (u32*)nla_data(received_int_attr);
+		if(received_val)
+			printk("ath9k_htc: val %08x\n", *received_val);
+	} else {
+		printk(KERN_ERR "attribute %i not present\n", ATH9K_HTC_A_VAL);
+	}
+
+	if(received_reg)
+		vals[0] = *received_reg;
+
+	if(received_val)
+		vals[1] = *received_val;
+
+	dbg_firmware_cmd(genl_ath9k_priv, DBG_CMD_SET_REG, vals);
+
+	skb = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (skb == NULL)
+		goto out;
+
+	msg_head = genlmsg_put(skb, 0, info->snd_seq + 1, &ath9k_htc_gnl_family, 0, ATH9K_C_SET);
+	if (msg_head == NULL) {
+		errc = -ENOMEM;
+		goto out;
+	}
+	
+	errc = nla_put_string(skb, ATH9K_HTC_A_STR, "reg set successfully");
+	if (errc != 0)
+		goto out;
+
+	genlmsg_end(skb, msg_head);
+
+	errc = genlmsg_unicast(genl_info_net(info), skb, info->snd_portid);
+	if (errc != 0)
+		goto out;
+
+	return 0;
+
+out:
+	printk(KERN_ERR "an error occured\n");
+
+	return 1;
+}
+
+static int ath9k_set_rate(struct sk_buff *iskb, struct genl_info *info) {
+	struct nlattr *received_int_attr;
+	u32 *received_val = NULL;
+	struct sk_buff *skb;
+	int errc;
+	void *msg_head;
+	u32 vals[2];
+
+	if (info == NULL)
+		goto out;
+
+	// TODO repeated code... simplify
+	received_int_attr = info->attrs[ATH9K_HTC_A_VAL];
+	if (received_int_attr) {
+		received_val = (u32*)nla_data(received_int_attr);
+		if(received_val)
+			printk("ath9k_htc: val %08x\n", *received_val);
+	} else {
+		printk(KERN_ERR "attribute %i not present\n", ATH9K_HTC_A_VAL);
+	}
+
+	if(received_val)
+		vals[0] = *received_val;
+
+	dbg_firmware_cmd(genl_ath9k_priv, DBG_CMD_SET_RATE, vals);
+
+	skb = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (skb == NULL)
+		goto out;
+
+	msg_head = genlmsg_put(skb, 0, info->snd_seq + 1, &ath9k_htc_gnl_family, 0, ATH9K_C_RATE);
+	if (msg_head == NULL) {
+		errc = -ENOMEM;
+		goto out;
+	}
+	
+	errc = nla_put_string(skb, ATH9K_HTC_A_STR, "rate set successfully");
+	if (errc != 0)
+		goto out;
+
+	genlmsg_end(skb, msg_head);
+
+	errc = genlmsg_unicast(genl_info_net(info), skb, info->snd_portid);
+	if (errc != 0)
+		goto out;
+
+	return 0;
+
+out:
+	printk(KERN_ERR "an error occured\n");
+
+	return 1;
+}
+
+static int ath9k_reset(struct sk_buff *iskb, struct genl_info *info) {
+	struct sk_buff *skb;
+	int errc;
+	void *msg_head;
+	u32 vals[2];
+
+	if (info == NULL)
+		goto out;
+
+	dbg_firmware_cmd(genl_ath9k_priv, DBG_CMD_RESET, vals);
+
+	// TODO repeated code... simplify
+	skb = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (skb == NULL)
+		goto out;
+
+	msg_head = genlmsg_put(skb, 0, info->snd_seq + 1, &ath9k_htc_gnl_family, 0, ATH9K_C_RESET);
+	if (msg_head == NULL) {
+		errc = -ENOMEM;
+		goto out;
+	}
+	
+	errc = nla_put_string(skb, ATH9K_HTC_A_STR, "reset counters");
+	if (errc != 0)
+		goto out;
+
+	genlmsg_end(skb, msg_head);
+
+	errc = genlmsg_unicast(genl_info_net(info), skb, info->snd_portid);
+	if (errc != 0)
+		goto out;
+
+	return 0;
+
+out:
+	printk(KERN_ERR "an error occured\n");
+
+	return 1;
+}
+
+static struct genl_ops ath9k_htc_gnl_ops[] = {
+	{
+		.cmd = ATH9K_C_ECHO,
+		.flags = 0,
+		.policy = ath9k_htc_genl_policy,
+		.doit = ath9k_echo,
+		.dumpit = NULL,
+	},
+	{
+		.cmd = ATH9K_C_SET,
+		.flags = 0,
+		.policy = ath9k_htc_genl_policy,
+		.doit = ath9k_set_reg,
+		.dumpit = NULL,
+	},
+	{
+		.cmd = ATH9K_C_RATE,
+		.flags = 0,
+		.policy = ath9k_htc_genl_policy,
+		.doit = ath9k_set_rate,
+		.dumpit = NULL,
+	},
+	{
+		.cmd = ATH9K_C_RESET,
+		.flags = 0,
+		.policy = ath9k_htc_genl_policy,
+		.doit = ath9k_reset,
+		.dumpit = NULL,
+	},
+};
+
+
 void ath9k_htc_deinit_debug(struct ath9k_htc_priv *priv)
 {
+	int errc;
 	ath9k_cmn_spectral_deinit_debug(&priv->spec_priv);
+
+	errc = genl_unregister_family(&ath9k_htc_gnl_family);
+	if(errc != 0){
+		printk(KERN_ERR "unregister family %i\n", errc);
+	}
 }
 
 int ath9k_htc_init_debug(struct ath_hw *ah)
 {
+	int errc;
 	struct ath_common *common = ath9k_hw_common(ah);
 	struct ath9k_htc_priv *priv = (struct ath9k_htc_priv *) common->priv;
 
@@ -530,6 +816,15 @@ int ath9k_htc_init_debug(struct ath_hw *ah)
 
 	ath9k_cmn_debug_base_eeprom(priv->debug.debugfs_phy, priv->ah);
 	ath9k_cmn_debug_modal_eeprom(priv->debug.debugfs_phy, priv->ah);
+
+	/* ath9k_htc netlink interface */
+	// TODO only works with one interface at the same time!
+	genl_ath9k_priv = priv;
+	errc = genl_register_family_with_ops(&ath9k_htc_gnl_family, ath9k_htc_gnl_ops);
+	if (errc != 0) {
+		printk("genl_register_family_with_ops error\n");
+		return 1;
+	}
 
 	return 0;
 }

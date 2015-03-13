@@ -41,6 +41,25 @@ struct wmi_event_swba {
 	u8 beacon_pending;
 } __packed;
 
+// New stuff
+typedef enum {
+    DBG_CMD_READ_MEMORY,
+    DBG_CMD_TEST,
+    DBG_CMD_SET_REG,
+    DBG_CMD_SET_RATE,
+    DBG_CMD_RESET
+} DBG_CMD_ID;
+
+struct dbg_cmd_request {
+	u8 id;
+	__be32 args[2];
+} __packed;
+
+struct dbg_cmd_response {
+	u8 length;
+	u8 buffer[33]; // WMI does not allow big packets
+} __packed;
+
 /*
  * 64 - HTC header - WMI header - 1 / txstatus
  * And some other hdr. space is also accounted for.
@@ -112,6 +131,9 @@ enum wmi_cmd_id {
 	WMI_TX_STATS_CMDID,
 	WMI_RX_STATS_CMDID,
 	WMI_BITRATE_MASK_CMDID,
+	WMI_REG_RMW_CMDID, // This value should be here, it's a bug in the driver.
+	// New stuff
+	WMI_DBGCMD_CMDID,
 };
 
 enum wmi_event_id {

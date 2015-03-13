@@ -594,6 +594,9 @@ void ath9k_htc_rfkill_poll_state(struct ieee80211_hw *hw);
 
 struct base_eep_header *ath9k_htc_get_eeprom_base(struct ath9k_htc_priv *priv);
 
+// TODO make more generic: any argument instead of just 2 int32s
+int dbg_firmware_cmd(struct ath9k_htc_priv *priv, u8 cmd_id, u32 arguments[2]);
+
 #ifdef CONFIG_MAC80211_LEDS
 void ath9k_configure_leds(struct ath9k_htc_priv *priv);
 void ath9k_init_leds(struct ath9k_htc_priv *priv);
